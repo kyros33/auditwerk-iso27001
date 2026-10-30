@@ -1,38 +1,52 @@
-const headers = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
-const json = (value, status=200) => new Response(JSON.stringify(value), {status,headers});
-const clean = (v,max=10000) => String(v??"").slice(0,max);
-async function body(req) { try { return await req.json(); } catch { return null; } }
-async function api(req, env, url) {
-  if (!env.DB) return json({error:"D1-Binding DB fehlt"},503);
-  const path=url.pathname;
-  try {
-    if(path==="/api/health") return json({ok:true,database:true});
-    if(path==="/api/clients") {
-      if(req.method==="GET") return json((await env.DB.prepare("SELECT * FROM clients ORDER BY name").all()).results);
-      if(req.method==="POST") { const d=await body(req); if(!d?.name?.trim()) return json({error:"Kundenname fehlt"},400);
-        const id=crypto.randomUUID(); await env.DB.prepare("INSERT INTO clients(id,name,logo_url) VALUES(?,?,?)").bind(id,clean(d.name,200),clean(d.logo_url,1000)).run();return json({id},201); }
-    }
-    if(path==="/api/audits") {
-      if(req.method==="GET") return json((await env.DB.prepare("SELECT a.*,c.name client_name FROM audits a JOIN clients c ON c.id=a.client_id ORDER BY a.created_at DESC").all()).results);
-      if(req.method==="POST") {const d=await body(req); if(!d?.client_id) return json({error:"Kunde fehlt"},400);
-        const id=crypto.randomUUID();await env.DB.prepare("INSERT INTO audits(id,client_id,title,year,mode,auditor,audit_date) VALUES(?,?,?,?,?,?,?)").bind(id, d.client_id,clean(d.title||"Internes Audit",200),Number(d.year)||new Date().getFullYear(),d.mode==="Vollaudit"?"Vollaudit":"Aufrechterhaltungsaudit",clean(d.auditor,200),clean(d.audit_date,30)).run();return json({id},201);}
-    }
-    if(path==="/api/questions" && req.method==="GET") return json((await env.DB.prepare("SELECT * FROM questions ORDER BY sort_index").all()).results);
-    if(path==="/api/import" && req.method==="POST") {
-      const d=await body(req);if(!Array.isArray(d?.questions)||d.questions.length>500) return json({error:"Ungültiger Fragenkatalog (max. 500)"},400);
-      const stmts=d.questions.filter(q=>q.id&&q.title).map((q,i)=>env.DB.prepare("INSERT INTO questions(id,category,title,reference,measure,question_full,question_maintenance,evidence_examples,year_2025,year_2026,year_2027,year_2028,templates,sort_index) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET category=excluded.category,title=excluded.title,reference=excluded.reference,measure=excluded.measure,question_full=excluded.question_full,question_maintenance=excluded.question_maintenance,evidence_examples=excluded.evidence_examples,year_2025=excluded.year_2025,year_2026=excluded.year_2026,year_2027=excluded.year_2027,year_2028=excluded.year_2028,templates=excluded.templates,sort_index=excluded.sort_index").bind(clean(q.id,50),clean(q.category,120),clean(q.title,250),clean(q.reference),clean(q.measure),clean(q.question_full),clean(q.question_maintenance),clean(q.evidence_examples),Number(!!q.year_2025),Number(!!q.year_2026),Number(!!q.year_2027),Number(!!q.year_2028),JSON.stringify(q.templates||{}),i));
-      for(let i=0;i<stmts.length;i+=50) await env.DB.batch(stmts.slice(i,i+50));
-      return json({imported:stmts.length});
-    }
-    const match=path.match(/^\/api\/audits\/([^/]+)\/answers$/);
-    if(match) {
-      const auditId=match[1];
-      if(req.method==="GET") return json((await env.DB.prepare("SELECT * FROM answers WHERE audit_id=?").bind(auditId).all()).results);
-      if(req.method==="PUT") { const d=await body(req);if(!d?.question_id) return json({error:"Prüfpunkt fehlt"},400);
-        await env.DB.prepare("INSERT INTO answers(audit_id,question_id,status,document,evidence,notes,finding,template_index,in_scope,updated_at) VALUES(?,?,?,?,?,?,?,?,?,datetime('now')) ON CONFLICT(audit_id,question_id) DO UPDATE SET status=excluded.status,document=excluded.document,evidence=excluded.evidence,notes=excluded.notes,finding=excluded.finding,template_index=excluded.template_index,in_scope=excluded.in_scope,updated_at=datetime('now')").bind(auditId,clean(d.question_id,50),clean(d.status,20),clean(d.document),clean(d.evidence),clean(d.notes),clean(d.finding),Number(d.template_index)||0,d.in_scope?1:0).run();return json({saved:true});}
-    }
-    return json({error:"Nicht gefunden"},404);
-  } catch(e) {return json({error:"Datenbankfehler",detail:clean(e.message,300)},500);}
+const headers={"content-type":"application/json; charset=utf-8","cache-control":"no-store"};
+const json=(v,status=200)=>new Response(JSON.stringify(v),{status,headers});
+const clean=(v,n=10000)=>String(v??"").slice(0,n);
+const parse=async r=>{try{return await r.json()}catch{return null}};
+const norm=(v)=>String(v??"").toLowerCase();
+const asTemplates=(v)=>{try {const p=JSON.parse(v||"[]");if(Array.isArray(p))return {full:p,maintenance:p};if(p&&typeof p==="object")return {full:p.full||p.voll||p.bausteine||[],maintenance:p.maintenance||p.aufrechterhaltung||p.bausteine||p.full||[]};}catch{}return {full:v?[String(v)]:[],maintenance:v?[String(v)]:[]}};
+const modeOf=a=>/voll|erstzertifizierung/i.test(a.bezeichnung||"")?"Vollaudit":"Aufrechterhaltungsaudit";
+const statusOf=s=>{let n=norm(s).trim();return n==="ok"?"OK":n==="nc"?"NC":n==="e"?"E":n==="empfehlung"?"E":n==="nichtkonformität"?"NC":""};
+async function api(req,env,url){
+ if(!env.DB)return json({error:"D1-Binding DB fehlt"},503);
+ // API requires Cloudflare Access, with a verified identity assertion (and Access application configured).
+ // Until ACCESS_TEAM_DOMAIN and ACCESS_AUD are configured, deny ALL API requests.
+ if(!env.ACCESS_TEAM_DOMAIN||!env.ACCESS_AUD)return json({error:"API gesperrt: Cloudflare Access konfigurieren"},503);
+ const jwt=req.headers.get("Cf-Access-Jwt-Assertion");if(!jwt)return json({error:"Anmeldung erforderlich"},401);
+ try{
+ const res=await fetch("https://"+env.ACCESS_TEAM_DOMAIN+"/cdn-cgi/access/get-identity",{headers:{"Cookie":"CF_Authorization="+jwt}});
+ if(!res.ok)return json({error:"Ungültige Access-Sitzung"},403);
+ const identity=await res.json();if(!identity?.email)return json({error:"Identität nicht bestätigt"},403);
+ }catch{return json({error:"Access konnte nicht überprüft werden"},503)}
+ const p=url.pathname;
+ try{
+ if(p==="/api/health")return json({ok:true,database:true});
+ if(p==="/api/clients"){
+  if(req.method==="GET"){const a=(await env.DB.prepare("SELECT * FROM kunden ORDER BY firmenname").all()).results;return json(a.map(x=>({id:String(x.id),name:x.firmenname,logo_url:x.logo_url})))}
+  if(req.method==="POST"){const d=await parse(req);if(!d?.name?.trim())return json({error:"Kundenname fehlt"},400);const x=await env.DB.prepare("INSERT INTO kunden (firmenname,logo_url) VALUES (?,?)").bind(clean(d.name,200),clean(d.logo_url,1000)).run();return json({id:String(x.meta.last_row_id)},201)}
+ }
+ if(p==="/api/audits"){
+  if(req.method==="GET"){const a=(await env.DB.prepare("SELECT a.*,k.firmenname client_name FROM audits a JOIN kunden k ON a.kunden_id=k.id ORDER BY a.id DESC").all()).results;return json(a.map(x=>({id:String(x.id),client_id:String(x.kunden_id),client_name:x.client_name,title:x.bezeichnung,year:Number((x.auditdatum||"").slice(0,4))||new Date().getFullYear(),mode:modeOf(x),auditor:x.auditor,audit_date:x.auditdatum})))}
+  if(req.method==="POST"){const d=await parse(req);if(!d?.client_id)return json({error:"Kunde fehlt"},400);const title=clean((d.title||"Internes Audit")+" – "+(d.mode||"Aufrechterhaltungsaudit"),250);const date=clean(d.audit_date||String(d.year)+"-01-01",30);const x=await env.DB.prepare("INSERT INTO audits (kunden_id,bezeichnung,auditdatum,auditor,status) VALUES (?,?,?,?,?)").bind(Number(d.client_id),title,date,clean(d.auditor,200),"Offen").run();return json({id:String(x.meta.last_row_id)},201)}
+ }
+ if(p==="/api/questions"&&req.method==="GET"){
+   const a=(await env.DB.prepare("SELECT * FROM aw_vorlagen ORDER BY sortierung,id").all()).results;
+   return json(a.map((x,i)=>{const years=norm(x.auswahljahre);const all=!years.trim();const selected=y=>all||years.includes(String(y));return {id:x.id,category:x.kategorie,title:x.titel,reference:x.id,measure:x.massnahme,question_full:x.vollfrage||x.frage,question_maintenance:x.frage||x.vollfrage,evidence_examples:x.pruefkriterien,year_2025:Number(selected(2025)),year_2026:Number(selected(2026)),year_2027:Number(selected(2027)),year_2028:Number(selected(2028)),templates:JSON.stringify(asTemplates(x.bausteine)),sort_index:x.sortierung??i}}));
+ }
+ if(p==="/api/import"&&req.method==="POST")return json({error:"Import gesperrt: Vorlage zunächst gegen bestehende Daten abgleichen"},403);
+ const m=p.match(/^\/api\/audits\/(\d+)\/answers$/);
+ if(m){const aid=Number(m[1]);
+  if(req.method==="GET"){const a=(await env.DB.prepare("SELECT * FROM aw_auditpositionen WHERE audit_id=?").bind(aid).all()).results;return json(a.map(x=>({question_id:x.control_id,status:statusOf(x.bewertung),document:"",evidence:x.nachweis,notes:x.notiz,finding:x.feststellung||x.massnahme_audit,template_index:0,in_scope:1})))}
+  if(req.method==="PUT"){const d=await parse(req);if(!d?.question_id)return json({error:"Prüfpunkt fehlt"},400);
+   const q=(await env.DB.prepare("SELECT * FROM aw_vorlagen WHERE id=?").bind(clean(d.question_id,50)).first());
+   if(!q)return json({error:"Unbekannter Prüfpunkt"},404);
+   const exists=await env.DB.prepare("SELECT id FROM aw_auditpositionen WHERE audit_id=? AND control_id=?").bind(aid,q.id).first();
+   if(exists)await env.DB.prepare("UPDATE aw_auditpositionen SET bewertung=?,nachweis=?,notiz=?,feststellung=?,massnahme_audit=?,aktualisiert_am=datetime('now') WHERE id=?").bind(clean(d.status,20),clean(d.evidence),clean(d.notes),clean(d.finding),clean(d.finding),exists.id).run();
+   else await env.DB.prepare("INSERT INTO aw_auditpositionen (audit_id,control_id,kategorie,titel,frage,vollfrage,pruefkriterien,massnahme,bausteine,bewertung,nachweis,notiz,feststellung,massnahme_audit,aktualisiert_am) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))").bind(aid,q.id,q.kategorie,q.titel,q.frage,q.vollfrage,q.pruefkriterien,q.massnahme,q.bausteine,clean(d.status,20),clean(d.evidence),clean(d.notes),clean(d.finding),clean(d.finding)).run();
+   return json({saved:true});
+  }
+ }
+ return json({error:"Nicht gefunden"},404)
+ }catch(e){return json({error:"Datenbankfehler",detail:clean(e.message,300)},500)}
 }
 const page = String.raw`<!doctype html>
 <html lang="de-CH"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Auditwerk – ISO 27001</title>
