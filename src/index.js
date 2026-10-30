@@ -168,7 +168,12 @@ async function api(req,env,url,ctx){
    const client=await env.DB.prepare("SELECT kunden_id FROM audits WHERE id=?").bind(aid).first();if(!client)return json({error:"Audit nicht gefunden"},404);
    const docId=d.doc_id?Number(d.doc_id):null;
    if(docId){const match=await env.DB.prepare("SELECT id FROM aw_dokumentverzeichnis WHERE id=? AND kunden_id=?").bind(docId,client.kunden_id).first();if(!match)return json({error:"Dokument gehört nicht zum Kunden"},400)}
-   await env.DB.prepare("INSERT INTO aw_pruefpunkt_dokumente(audit_id,control_id,dokument_id,referenz) VALUES(?,?,?,?) ON CONFLICT(audit_id,control_id) DO UPDATE SET dokument_id=excluded.dokument_id,referenz=excluded.referenz").bind(aid,q.id,docId,clean(d.document,1000)).run();
+   const ids=Array.isArray(d.doc_ids)?[...new Set(d.doc_ids.map(Number))]:(docId?[docId]:[]);
+   if(ids.length>100||ids.some(id=>!Number.isInteger(id)||id<1))return json({error:"Ungültige Dokumentauswahl"},400);
+   if(ids.length){const available=(await env.DB.prepare("SELECT id FROM aw_dokumentverzeichnis WHERE kunden_id=?").bind(client.kunden_id).all()).results;const allowed=new Set(available.map(x=>x.id));if(ids.some(id=>!allowed.has(id)))return json({error:"Dokument gehört nicht zum Kunden"},400)}
+   await env.DB.prepare("INSERT INTO aw_pruefpunkt_dokumente(audit_id,control_id,dokument_id,referenz) VALUES(?,?,?,?) ON CONFLICT(audit_id,control_id) DO UPDATE SET dokument_id=excluded.dokument_id,referenz=excluded.referenz").bind(aid,q.id,ids[0]||null,clean(d.document,1000)).run();
+   await env.DB.prepare("DELETE FROM aw_pruefpunkt_dokumente_mehrfach WHERE audit_id=? AND control_id=?").bind(aid,q.id).run();
+   if(ids.length)await env.DB.batch(ids.map(id=>env.DB.prepare("INSERT INTO aw_pruefpunkt_dokumente_mehrfach(audit_id,control_id,dokument_id) VALUES(?,?,?)").bind(aid,q.id,id)));
    return json({saved:true});
   }
  }
