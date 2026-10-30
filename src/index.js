@@ -127,6 +127,16 @@ async function api(req,env,url,ctx){
    const a=(await env.DB.prepare("SELECT v.*,n.normtext FROM aw_vorlagen v LEFT JOIN aw_normtexte n ON n.control_id=v.id ORDER BY v.sortierung,v.id").all()).results;
    return json(a.map((x,i)=>{let years={};try{years=JSON.parse(x.auswahljahre||"{}")}catch{}const selected=y=>years[String(y)]===1||years[String(y)]===true;return {id:x.id,category:x.kategorie,title:x.titel,reference:x.id,normtext:x.normtext||"",measure:x.massnahme,question_full:x.vollfrage||x.frage,question_maintenance:x.frage||x.vollfrage,evidence_examples:x.pruefkriterien,year_flags:years,year_2025:Number(selected(2025)),year_2026:Number(selected(2026)),year_2027:Number(selected(2027)),year_2028:Number(selected(2028)),templates:JSON.stringify(asTemplates(x.bausteine)),sort_index:x.sortierung??i}}));
  }
+ const planMatch=p.match(/^\/api\/audits\/(\d+)\/audit-plan$/);
+ if(planMatch){
+  const aid=Number(planMatch[1]);if(role!=="admin"&&!await canAudit(env.DB,email,aid))return json({error:"Kein Zugriff auf dieses Audit"},403);
+  const audit=await env.DB.prepare("SELECT id FROM audits WHERE id=?").bind(aid).first();if(!audit)return json({error:"Audit nicht gefunden"},404);
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_auditplaene (audit_id INTEGER PRIMARY KEY, inhalt TEXT NOT NULL, aktualisiert_am TEXT DEFAULT (datetime('now')) )").run();
+  if(req.method==="GET"){const saved=await env.DB.prepare("SELECT inhalt FROM aw_auditplaene WHERE audit_id=?").bind(aid).first();return json({plan:saved?JSON.parse(saved.inhalt):null})}
+  if(req.method==="PUT"){if(!roleDefinition.kann_planen&&!roleDefinition.kann_bearbeiten)return json({error:"Keine Schreibberechtigung"},403);const d=await parse(req);if(!d||!Array.isArray(d.rows)||d.rows.length>100)return json({error:"Ungültiger Auditplan"},400);
+   const payload={template:clean(d.template,30),date:clean(d.date,30),auditor:clean(d.auditor,200),contact:clean(d.contact,200),location:clean(d.location,200),criteria:clean(d.criteria,500),objectives:clean(d.objectives,3000),version:clean(d.version,30),notes:clean(d.notes,3000),rows:d.rows.map(r=>({day:Math.max(1,Math.min(2,Number(r.day)||1)),time:clean(r.time,20),area:clean(r.area,200),people:clean(r.people,300),topic:clean(r.topic,3500)}))};
+   await env.DB.prepare("INSERT INTO aw_auditplaene(audit_id,inhalt) VALUES (?,?) ON CONFLICT(audit_id) DO UPDATE SET inhalt=excluded.inhalt,aktualisiert_am=datetime('now')").bind(aid,JSON.stringify(payload)).run();return json({saved:true})}
+ }
  if(p==="/api/planning/year"&&req.method==="POST"){
    const d=await parse(req),year=Number(d?.year),hasSource=d?.copy_from!==undefined&&d?.copy_from!==null&&d?.copy_from!=="",copyYear=Number(d?.copy_from);
    if(!Number.isInteger(year)||year<2025||year>2100)return json({error:"Ungültiges Auditjahr"},400);
