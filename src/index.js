@@ -91,13 +91,18 @@ async function api(req,env,url,ctx){
  if(p==="/api/import"&&req.method==="POST")return json({error:"Import gesperrt: Vorlage zunächst gegen bestehende Daten abgleichen"},403);
  const m=p.match(/^\/api\/audits\/(\d+)\/answers$/);
  if(m){const aid=Number(m[1]);
-  if(req.method==="GET"){const a=(await env.DB.prepare("SELECT * FROM aw_auditpositionen WHERE audit_id=?").bind(aid).all()).results;return json(a.map(x=>({question_id:x.control_id,status:statusOf(x.bewertung),document:"",evidence:x.nachweis,notes:x.notiz,finding:x.feststellung||x.massnahme_audit,template_index:0,in_scope:null})))}
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_pruefpunkt_dokumente (audit_id INTEGER NOT NULL,control_id TEXT NOT NULL,dokument_id INTEGER,referenz TEXT NOT NULL DEFAULT '',PRIMARY KEY(audit_id,control_id))").run();
+  if(req.method==="GET"){const a=(await env.DB.prepare("SELECT * FROM aw_auditpositionen WHERE audit_id=?").bind(aid).all()).results;const docs=(await env.DB.prepare("SELECT control_id,dokument_id,referenz FROM aw_pruefpunkt_dokumente WHERE audit_id=?").bind(aid).all()).results;const refs=new Map(docs.map(d=>[d.control_id,d]));return json(a.map(x=>({question_id:x.control_id,status:statusOf(x.bewertung),document:refs.get(x.control_id)?.referenz||"",doc_id:refs.get(x.control_id)?.dokument_id||null,evidence:x.nachweis,notes:x.notiz,finding:x.feststellung||x.massnahme_audit,template_index:0,in_scope:null})))}
   if(req.method==="PUT"){const d=await parse(req);if(!d?.question_id)return json({error:"Prüfpunkt fehlt"},400);
    const q=(await env.DB.prepare("SELECT * FROM aw_vorlagen WHERE id=?").bind(clean(d.question_id,50)).first());
    if(!q)return json({error:"Unbekannter Prüfpunkt"},404);
    const exists=await env.DB.prepare("SELECT id FROM aw_auditpositionen WHERE audit_id=? AND control_id=?").bind(aid,q.id).first();
    if(exists)await env.DB.prepare("UPDATE aw_auditpositionen SET bewertung=?,nachweis=?,notiz=?,feststellung=?,massnahme_audit=?,aktualisiert_am=datetime('now') WHERE id=?").bind(clean(d.status,20),clean(d.evidence),clean(d.notes),clean(d.finding),clean(d.finding),exists.id).run();
    else await env.DB.prepare("INSERT INTO aw_auditpositionen (audit_id,control_id,kategorie,titel,frage,vollfrage,pruefkriterien,massnahme,bausteine,bewertung,nachweis,notiz,feststellung,massnahme_audit,aktualisiert_am) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))").bind(aid,q.id,q.kategorie,q.titel,q.frage,q.vollfrage,q.pruefkriterien,q.massnahme,q.bausteine,clean(d.status,20),clean(d.evidence),clean(d.notes),clean(d.finding),clean(d.finding)).run();
+   const client=await env.DB.prepare("SELECT kunden_id FROM audits WHERE id=?").bind(aid).first();if(!client)return json({error:"Audit nicht gefunden"},404);
+   const docId=d.doc_id?Number(d.doc_id):null;
+   if(docId){const match=await env.DB.prepare("SELECT id FROM aw_dokumentverzeichnis WHERE id=? AND kunden_id=?").bind(docId,client.kunden_id).first();if(!match)return json({error:"Dokument gehört nicht zum Kunden"},400)}
+   await env.DB.prepare("INSERT INTO aw_pruefpunkt_dokumente(audit_id,control_id,dokument_id,referenz) VALUES(?,?,?,?) ON CONFLICT(audit_id,control_id) DO UPDATE SET dokument_id=excluded.dokument_id,referenz=excluded.referenz").bind(aid,q.id,docId,clean(d.document,1000)).run();
    return json({saved:true});
   }
  }
