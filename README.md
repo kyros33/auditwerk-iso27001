@@ -22,3 +22,6 @@ Die Tabelle aus D1 Studio wurde als `export.csv` ausgewertet (55 Spaltendefiniti
 8. Audit- und Datenbank-Backups vor dem Deployment verifizieren.
 
 **Kein produktiver Deploy und keine echten Kundendaten, bevor diese Punkte erfüllt und getestet sind.**
+
+## Deployment-Auslöser
+Cloudflare Builds wurden am 30.10.2026 wieder aktiviert. Dieser Commit dient zur Veröffentlichung des aktuellen main-Standes; er verändert keine Datenbanktabellen.
