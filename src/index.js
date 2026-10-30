@@ -319,8 +319,8 @@ async function nativePlanExport(){
  const descendants=(node,name)=>Array.from(node.getElementsByTagNameNS(ns,name));
  const direct=(node,name)=>Array.from(node.children).filter(c=>c.localName===name&&c.namespaceURI===ns);
  const setCell=(cell,val)=>{
-  const texts=descendants(cell,'t');
-  if(!texts.length)return;
+  let texts=descendants(cell,'t');
+  if(!texts.length){const paragraph=descendants(cell,'p')[0];if(!paragraph)return;const run=doc.createElementNS(ns,'w:r'),node=doc.createElementNS(ns,'w:t');run.appendChild(node);paragraph.appendChild(run);texts=[node]}
   const existing=descendants(cell,'p').map(p=>descendants(p,'t').map(t=>t.textContent||'').join('')).filter(x=>x.trim()).join('\n');
   if(existing.trim()===String(val??'').trim())return;
   texts[0].textContent=String(val??'');
@@ -332,9 +332,9 @@ async function nativePlanExport(){
  const company=tables[3],companyRows=direct(company,'tr');
  const setInfo=(row,val)=>{const cells=direct(companyRows[row],'tc');if(cells[1])setCell(cells[1],val)};
  setInfo(1,p.criteria);setInfo(3,p.date);setInfo(4,active.client_name);
- setInfo(7,p.contact);setInfo(8,p.auditor);
+ setInfo(5,p.location);setInfo(7,p.contact);setInfo(8,p.auditor);
  const allText=descendants(doc,'t');
- allText.forEach(t=>{if(!t.textContent)return; t.textContent=t.textContent.replace(/\bFIRMA\b|\bFirma\b/g,active.client_name)});
+ allText.forEach(t=>{if(!t.textContent)return; t.textContent=t.textContent.replace(/\bFIRMA\b|\bFirma\b/g,active.client_name).replace(/^20(25|26)$/,String(active.year))});
  const programTables=tables.slice(4,kind==='year1_2'?6:5);
  const chunks=kind==='year1_2'?[p.rows.filter(r=>Number(r.day)===1),p.rows.filter(r=>Number(r.day)===2)]:[p.rows];
  programTables.forEach((table,ti)=>{
