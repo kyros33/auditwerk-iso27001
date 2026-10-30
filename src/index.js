@@ -1,3 +1,4 @@
+import {initAuthSchema} from "./auth.js";
 const headers={"content-type":"application/json; charset=utf-8","cache-control":"no-store"};
 const json=(v,status=200)=>new Response(JSON.stringify(v),{status,headers});
 const clean=(v,n=10000)=>String(v??"").slice(0,n);
