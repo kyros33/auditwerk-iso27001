@@ -6,18 +6,53 @@ const norm=(v)=>String(v??"").toLowerCase();
 const asTemplates=(v)=>{try {const p=JSON.parse(v||"[]");if(Array.isArray(p))return {full:p.slice(0,4),maintenance:p.slice(4,8).length?p.slice(4,8):p.slice(0,4)};if(p&&typeof p==="object")return {full:p.full||p.voll||p.bausteine||[],maintenance:p.maintenance||p.aufrechterhaltung||p.bausteine||p.full||[]};}catch{}return {full:v?[String(v)]:[],maintenance:v?[String(v)]:[]}};
 const modeOf=a=>/vollaudit|erstzertifizierung/i.test(a.bezeichnung||"")||(!/aufrechterhaltung/i.test(a.bezeichnung||"")&&Number(String(a.auditdatum||"").slice(0,4))===2025)?"Vollaudit":"Aufrechterhaltungsaudit";
 const statusOf=s=>{let n=norm(s).trim();return n==="ok"?"OK":n==="nc"?"NC":n==="e"?"E":n==="empfehlung"?"E":n==="nichtkonformität"?"NC":""};
+const INITIAL_ADMIN_EMAIL="eanraigiii@gmail.com";
+async function accessRole(env,email){
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_benutzer (email TEXT PRIMARY KEY,rolle TEXT NOT NULL CHECK(rolle IN ('admin','auditor')),aktiv INTEGER NOT NULL DEFAULT 1)").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_benutzer_kunden (email TEXT NOT NULL,kunden_id INTEGER NOT NULL,PRIMARY KEY(email,kunden_id))").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_benutzer_audits (email TEXT NOT NULL,audit_id INTEGER NOT NULL,PRIMARY KEY(email,audit_id))").run();
+ // Hard-coded initial administrator, cannot be downgraded by API.
+ if(email===INITIAL_ADMIN_EMAIL)return "admin";
+ const row=await env.DB.prepare("SELECT rolle FROM aw_benutzer WHERE email=? AND aktiv=1").bind(email).first();
+ return row?.rolle==="auditor"?"auditor":null;
+}
+async function canClient(db,email,clientId){return !!await db.prepare("SELECT 1 FROM aw_benutzer_kunden WHERE email=? AND kunden_id=?").bind(email,Number(clientId)).first()}
+async function canAudit(db,email,auditId){return !!await db.prepare("SELECT 1 FROM aw_benutzer_audits WHERE email=? AND audit_id=?").bind(email,Number(auditId)).first()}
 async function api(req,env,url,ctx){
  if(!env.DB)return json({error:"D1-Binding DB fehlt"},503);
- // Require Cloudflare Access authentication for each API request.
- // ctx.access is supplied by Cloudflare after authentication.
- if(!ctx?.access)return json({error:"Anmeldung über Cloudflare Access erforderlich"},403);
- try{
-   const identity=await ctx.access.getIdentity();
-   if(!identity?.email)return json({error:"Keine bestätigte Benutzeridentität"},403);
- }catch{return json({error:"Access-Identität konnte nicht geprüft werden"},403)}
+ if(!ctx?.access)return json({error:"Cloudflare Access Anmeldung erforderlich"},403);
+ let email;
+ try {const identity=await ctx.access.getIdentity();email=String(identity?.email||"").trim().toLowerCase();if(!email)return json({error:"Keine bestätigte Identität"},403)}catch{return json({error:"Access-Identität konnte nicht geprüft werden"},403)}
+ let role;try{role=await accessRole(env,email)}catch{return json({error:"Berechtigungssystem nicht verfügbar"},503)}
+ if(!role)return json({error:"Kein Auditwerk-Zugang zugewiesen"},403);
  const p=url.pathname;
  try{
- if(p==="/api/me"){const identity=await ctx.access.getIdentity();return json({email:identity.email,name:identity.name||identity.email})}
+ if(p==="/api/me"){const identity=await ctx.access.getIdentity();return json({email,name:identity.name||email,role})}
+ if(p==="/api/users"){
+   if(role!=="admin")return json({error:"Nur Administrator"},403);
+   if(req.method==="GET"){return json((await env.DB.prepare("SELECT email,rolle,aktiv FROM aw_benutzer ORDER BY email").all()).results)}
+   if(req.method==="POST"){const d=await parse(req),target=String(d?.email||"").trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)||target===INITIAL_ADMIN_EMAIL||d?.role!=="auditor")return json({error:"Ungültiger Benutzer"},400);
+     await env.DB.prepare("INSERT INTO aw_benutzer(email,rolle,aktiv) VALUES(?,'auditor',1) ON CONFLICT(email) DO UPDATE SET rolle='auditor',aktiv=1").bind(target).run();return json({saved:true})}
+ }
+ if(p==="/api/users/assign"){
+   if(role!=="admin")return json({error:"Nur Administrator"},403);
+   const d=await parse(req),target=String(d?.email||"").trim().toLowerCase(),id=Number(d?.id),kind=d?.kind,enabled=d?.enabled;
+   if(!target||!Number.isInteger(id)||id<1||!["customer","audit"].includes(kind)||typeof enabled!=="boolean")return json({error:"Ungültige Zuweisung"},400);
+   if(target===INITIAL_ADMIN_EMAIL||!await env.DB.prepare("SELECT 1 FROM aw_benutzer WHERE email=? AND rolle='auditor' AND aktiv=1").bind(target).first())return json({error:"Auditor nicht vorhanden"},400);
+   const table=kind==="customer"?"aw_benutzer_kunden":"aw_benutzer_audits",column=kind==="customer"?"kunden_id":"audit_id";
+   if(enabled)await env.DB.prepare("INSERT OR IGNORE INTO "+table+"(email,"+column+") VALUES(?,?)").bind(target,id).run();
+   else await env.DB.prepare("DELETE FROM "+table+" WHERE email=? AND "+column+"=?").bind(target,id).run();return json({saved:true});
+ }
+ if(role==="auditor"){
+   if(p==="/api/planning/year"||p==="/api/planning/item"||p==="/api/import"||p==="/api/documents/import")return json({error:"Nur Administrator"},403);
+   if(p==="/api/clients"&&req.method!=="GET")return json({error:"Nur Administrator"},403);
+   const auditMatch=p.match(/^\/api\/audits\/(\d+)\//);
+   if(auditMatch&&!await canAudit(env.DB,email,auditMatch[1]))return json({error:"Kein Zugriff auf dieses Audit"},403);
+   const documentMatch=p.match(/^\/api\/documents\/(\d+)$/);
+   if(documentMatch&&!await canClient(env.DB,email,url.searchParams.get("client_id")))return json({error:"Kein Zugriff auf diesen Kunden"},403);
+   if(p==="/api/documents"&&req.method==="GET"&&!await canClient(env.DB,email,url.searchParams.get("client_id")))return json({error:"Kein Zugriff auf diesen Kunden"},403);
+   if(p==="/api/documents"&&req.method==="POST"){const d=await req.clone().json().catch(()=>null);if(!await canClient(env.DB,email,d?.client_id))return json({error:"Kein Zugriff auf diesen Kunden"},403)}
+ }
  if(p==="/api/health")return json({ok:true,database:true});
  if(/^\/api\/audits\/\d+\/report-intro$/.test(p)){
   const auditId=Number(p.split("/")[3]);
@@ -56,12 +91,12 @@ async function api(req,env,url,ctx){
   }
  }
  if(p==="/api/clients"){
-  if(req.method==="GET"){const a=(await env.DB.prepare("SELECT * FROM kunden ORDER BY firmenname").all()).results;return json(a.map(x=>({id:String(x.id),name:x.firmenname,logo_url:x.logo_url})))}
+  if(req.method==="GET"){const a=(await env.DB.prepare("SELECT * FROM kunden WHERE (?='admin' OR id IN (SELECT kunden_id FROM aw_benutzer_kunden WHERE email=?)) ORDER BY firmenname").bind(role,email).all()).results;return json(a.map(x=>({id:String(x.id),name:x.firmenname,logo_url:x.logo_url})))}
   if(req.method==="POST"){const d=await parse(req);if(!d?.name?.trim())return json({error:"Kundenname fehlt"},400);const x=await env.DB.prepare("INSERT INTO kunden (firmenname,logo_url) VALUES (?,?)").bind(clean(d.name,200),clean(d.logo_url,1000)).run();return json({id:String(x.meta.last_row_id)},201)}
  }
  if(p==="/api/audits"){
-  if(req.method==="GET"){const a=(await env.DB.prepare("SELECT a.*,k.firmenname client_name FROM audits a JOIN kunden k ON a.kunden_id=k.id ORDER BY a.id DESC").all()).results;return json(a.map(x=>({id:String(x.id),client_id:String(x.kunden_id),client_name:x.client_name,title:x.bezeichnung,year:Number((x.auditdatum||"").slice(0,4))||new Date().getFullYear(),mode:modeOf(x),auditor:x.auditor,audit_date:x.auditdatum})))}
-  if(req.method==="POST"){const d=await parse(req);if(!d?.client_id)return json({error:"Kunde fehlt"},400);const title=clean((d.title||"Internes Audit")+" – "+(d.mode||"Aufrechterhaltungsaudit"),250);const date=clean(d.audit_date||String(d.year)+"-01-01",30);const x=await env.DB.prepare("INSERT INTO audits (kunden_id,bezeichnung,auditdatum,auditor,status) VALUES (?,?,?,?,?)").bind(Number(d.client_id),title,date,clean(d.auditor,200),"Offen").run();return json({id:String(x.meta.last_row_id)},201)}
+  if(req.method==="GET"){const a=(await env.DB.prepare("SELECT a.*,k.firmenname client_name FROM audits a JOIN kunden k ON a.kunden_id=k.id WHERE (?='admin' OR a.id IN (SELECT audit_id FROM aw_benutzer_audits WHERE email=?)) ORDER BY a.id DESC").bind(role,email).all()).results;return json(a.map(x=>({id:String(x.id),client_id:String(x.kunden_id),client_name:x.client_name,title:x.bezeichnung,year:Number((x.auditdatum||"").slice(0,4))||new Date().getFullYear(),mode:modeOf(x),auditor:x.auditor,audit_date:x.auditdatum})))}
+  if(req.method==="POST"){const d=await parse(req);if(!d?.client_id)return json({error:"Kunde fehlt"},400);if(role==="auditor"&&!await canClient(env.DB,email,d.client_id))return json({error:"Kein Zugriff auf Kundenmandat"},403);const title=clean((d.title||"Internes Audit")+" – "+(d.mode||"Aufrechterhaltungsaudit"),250);const date=clean(d.audit_date||String(d.year)+"-01-01",30);const x=await env.DB.prepare("INSERT INTO audits (kunden_id,bezeichnung,auditdatum,auditor,status) VALUES (?,?,?,?,?)").bind(Number(d.client_id),title,date,clean(d.auditor,200),"Offen").run();return json({id:String(x.meta.last_row_id)},201)}
  }
  if(p==="/api/questions"&&req.method==="GET"){
    const a=(await env.DB.prepare("SELECT * FROM aw_vorlagen ORDER BY sortierung,id").all()).results;
