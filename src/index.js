@@ -3,8 +3,8 @@ const json=(v,status=200)=>new Response(JSON.stringify(v),{status,headers});
 const clean=(v,n=10000)=>String(v??"").slice(0,n);
 const parse=async r=>{try{return await r.json()}catch{return null}};
 const norm=(v)=>String(v??"").toLowerCase();
-const asTemplates=(v)=>{try {const p=JSON.parse(v||"[]");if(Array.isArray(p))return {full:p,maintenance:p};if(p&&typeof p==="object")return {full:p.full||p.voll||p.bausteine||[],maintenance:p.maintenance||p.aufrechterhaltung||p.bausteine||p.full||[]};}catch{}return {full:v?[String(v)]:[],maintenance:v?[String(v)]:[]}};
-const modeOf=a=>/voll|erstzertifizierung/i.test(a.bezeichnung||"")?"Vollaudit":"Aufrechterhaltungsaudit";
+const asTemplates=(v)=>{try {const p=JSON.parse(v||"[]");if(Array.isArray(p))return {full:p.slice(0,4),maintenance:p.slice(4,8).length?p.slice(4,8):p.slice(0,4)};if(p&&typeof p==="object")return {full:p.full||p.voll||p.bausteine||[],maintenance:p.maintenance||p.aufrechterhaltung||p.bausteine||p.full||[]};}catch{}return {full:v?[String(v)]:[],maintenance:v?[String(v)]:[]}};
+const modeOf=a=>/vollaudit|erstzertifizierung/i.test(a.bezeichnung||"")||(!/aufrechterhaltung/i.test(a.bezeichnung||"")&&Number(String(a.auditdatum||"").slice(0,4))===2025)?"Vollaudit":"Aufrechterhaltungsaudit";
 const statusOf=s=>{let n=norm(s).trim();return n==="ok"?"OK":n==="nc"?"NC":n==="e"?"E":n==="empfehlung"?"E":n==="nichtkonformität"?"NC":""};
 async function api(req,env,url,ctx){
  if(!env.DB)return json({error:"D1-Binding DB fehlt"},503);
