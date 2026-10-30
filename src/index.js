@@ -30,7 +30,7 @@ async function api(req,env,url){
  }
  if(p==="/api/questions"&&req.method==="GET"){
    const a=(await env.DB.prepare("SELECT * FROM aw_vorlagen ORDER BY sortierung,id").all()).results;
-   return json(a.map((x,i)=>{const years=norm(x.auswahljahre);const all=!years.trim();const selected=y=>all||years.includes(String(y));return {id:x.id,category:x.kategorie,title:x.titel,reference:x.id,measure:x.massnahme,question_full:x.vollfrage||x.frage,question_maintenance:x.frage||x.vollfrage,evidence_examples:x.pruefkriterien,year_2025:Number(selected(2025)),year_2026:Number(selected(2026)),year_2027:Number(selected(2027)),year_2028:Number(selected(2028)),templates:JSON.stringify(asTemplates(x.bausteine)),sort_index:x.sortierung??i}}));
+   return json(a.map((x,i)=>{let years={};try{years=JSON.parse(x.auswahljahre||"{}")}catch{}const selected=y=>years[String(y)]===1||years[String(y)]===true;return {id:x.id,category:x.kategorie,title:x.titel,reference:x.id,measure:x.massnahme,question_full:x.vollfrage||x.frage,question_maintenance:x.frage||x.vollfrage,evidence_examples:x.pruefkriterien,year_2025:Number(selected(2025)),year_2026:Number(selected(2026)),year_2027:Number(selected(2027)),year_2028:Number(selected(2028)),templates:JSON.stringify(asTemplates(x.bausteine)),sort_index:x.sortierung??i}}));
  }
  if(p==="/api/import"&&req.method==="POST")return json({error:"Import gesperrt: Vorlage zunächst gegen bestehende Daten abgleichen"},403);
  const m=p.match(/^\/api\/audits\/(\d+)\/answers$/);
