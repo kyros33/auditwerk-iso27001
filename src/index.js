@@ -6,17 +6,15 @@ const norm=(v)=>String(v??"").toLowerCase();
 const asTemplates=(v)=>{try {const p=JSON.parse(v||"[]");if(Array.isArray(p))return {full:p,maintenance:p};if(p&&typeof p==="object")return {full:p.full||p.voll||p.bausteine||[],maintenance:p.maintenance||p.aufrechterhaltung||p.bausteine||p.full||[]};}catch{}return {full:v?[String(v)]:[],maintenance:v?[String(v)]:[]}};
 const modeOf=a=>/voll|erstzertifizierung/i.test(a.bezeichnung||"")?"Vollaudit":"Aufrechterhaltungsaudit";
 const statusOf=s=>{let n=norm(s).trim();return n==="ok"?"OK":n==="nc"?"NC":n==="e"?"E":n==="empfehlung"?"E":n==="nichtkonformität"?"NC":""};
-async function api(req,env,url){
+async function api(req,env,url,ctx){
  if(!env.DB)return json({error:"D1-Binding DB fehlt"},503);
- // API requires Cloudflare Access, with a verified identity assertion (and Access application configured).
- // Until ACCESS_TEAM_DOMAIN and ACCESS_AUD are configured, deny ALL API requests.
- if(!env.ACCESS_TEAM_DOMAIN||!env.ACCESS_AUD)return json({error:"API gesperrt: Cloudflare Access konfigurieren"},503);
- const jwt=req.headers.get("Cf-Access-Jwt-Assertion");if(!jwt)return json({error:"Anmeldung erforderlich"},401);
+ // Require Cloudflare Access authentication for each API request.
+ // ctx.access is supplied by Cloudflare after authentication.
+ if(!ctx?.access)return json({error:"Anmeldung über Cloudflare Access erforderlich"},403);
  try{
- const res=await fetch("https://"+env.ACCESS_TEAM_DOMAIN+"/cdn-cgi/access/get-identity",{headers:{"Cookie":"CF_Authorization="+jwt}});
- if(!res.ok)return json({error:"Ungültige Access-Sitzung"},403);
- const identity=await res.json();if(!identity?.email)return json({error:"Identität nicht bestätigt"},403);
- }catch{return json({error:"Access konnte nicht überprüft werden"},503)}
+   const identity=await ctx.access.getIdentity();
+   if(!identity?.email)return json({error:"Keine bestätigte Benutzeridentität"},403);
+ }catch{return json({error:"Access-Identität konnte nicht geprüft werden"},403)}
  const p=url.pathname;
  try{
  if(p==="/api/health")return json({ok:true,database:true});
@@ -85,4 +83,4 @@ $('add-audit').onclick=async()=>{try{await call('/api/audits','POST',{client_id:
 $('catalog-file').onchange=async e=>{try{const parsed=JSON.parse(await e.target.files[0].text());const result=await call('/api/import','POST',parsed);$('import-result').textContent=result.imported+' Prüfpunkte importiert';await init()}catch(err){$('import-result').textContent=err.message}};
 init();
 </script></body></html>`;
-export default { async fetch(req, env) { const url = new URL(req.url); if (url.pathname.startsWith('/api/')) return api(req, env, url); if (req.method !== 'GET') return new Response('Method not allowed', {status:405}); return new Response(page, {headers: {'content-type':'text/html; charset=utf-8','x-content-type-options':'nosniff','content-security-policy':"frame-ancestors 'none'"}}); } };
+export default { async fetch(req, env, ctx) { const url = new URL(req.url); if (url.pathname.startsWith('/api/')) return api(req, env, url, ctx); if (req.method !== 'GET') return new Response('Method not allowed', {status:405}); return new Response(page, {headers: {'content-type':'text/html; charset=utf-8','x-content-type-options':'nosniff','content-security-policy':"frame-ancestors 'none'"}}); } };
