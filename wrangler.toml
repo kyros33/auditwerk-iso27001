@@ -1,9 +1,8 @@
-name = "auditwerk-iso27001"
+name = "auditwerk"
 main = "src/index.js"
 compatibility_date = "2026-10-01"
 
-# Vor Deployment echte D1-ID eintragen:
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "auditwerk-db"
-# database_id = "DEINE_D1_DATABASE_ID"
+[[d1_databases]]
+binding = "DB"
+database_name = "auditwerk-db"
+database_id = "90275ead-0845-49c4-ad0c-a13858bb68eb"
