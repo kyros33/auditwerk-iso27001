@@ -157,6 +157,7 @@ async function api(req,env,url,ctx){
  const m=p.match(/^\/api\/audits\/(\d+)\/answers$/);
  if(m){const aid=Number(m[1]);
   await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_pruefpunkt_dokumente (audit_id INTEGER NOT NULL,control_id TEXT NOT NULL,dokument_id INTEGER,referenz TEXT NOT NULL DEFAULT '',PRIMARY KEY(audit_id,control_id))").run();
+  await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_pruefpunkt_dokumente_mehrfach (audit_id INTEGER NOT NULL,control_id TEXT NOT NULL,dokument_id INTEGER NOT NULL,PRIMARY KEY(audit_id,control_id,dokument_id))").run();
   if(req.method==="GET"){const a=(await env.DB.prepare("SELECT * FROM aw_auditpositionen WHERE audit_id=?").bind(aid).all()).results;const docs=(await env.DB.prepare("SELECT control_id,dokument_id,referenz FROM aw_pruefpunkt_dokumente WHERE audit_id=?").bind(aid).all()).results;const refs=new Map(docs.map(d=>[d.control_id,d]));return json(a.map(x=>({question_id:x.control_id,status:statusOf(x.bewertung),document:refs.get(x.control_id)?.referenz||"",doc_id:refs.get(x.control_id)?.dokument_id||null,evidence:x.nachweis,notes:x.notiz,finding:x.feststellung||x.massnahme_audit,template_index:0,in_scope:null})))}
   if(req.method==="PUT"){const d=await parse(req);if(!d?.question_id)return json({error:"Prüfpunkt fehlt"},400);
    const q=(await env.DB.prepare("SELECT * FROM aw_vorlagen WHERE id=?").bind(clean(d.question_id,50)).first());
