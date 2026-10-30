@@ -11,13 +11,14 @@ const INITIAL_ADMIN_EMAIL="eanraigiii@gmail.com";
 async function accessRole(env,email){
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_benutzer (email TEXT PRIMARY KEY,rolle TEXT NOT NULL CHECK(rolle IN ('admin','auditor')),aktiv INTEGER NOT NULL DEFAULT 1)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_rollen (email TEXT PRIMARY KEY,rolle TEXT NOT NULL CHECK(rolle IN (\'admin\',\'auditor\',\'leser\')))").run();
+ await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_rollen_zuordnung_neu (email TEXT PRIMARY KEY,rolle TEXT NOT NULL)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_rollen_definitionen (id TEXT PRIMARY KEY,bezeichnung TEXT NOT NULL,kann_bearbeiten INTEGER NOT NULL DEFAULT 0,kann_planen INTEGER NOT NULL DEFAULT 0)").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_benutzer_kunden (email TEXT NOT NULL,kunden_id INTEGER NOT NULL,PRIMARY KEY(email,kunden_id))").run();
  await env.DB.prepare("CREATE TABLE IF NOT EXISTS aw_benutzer_audits (email TEXT NOT NULL,audit_id INTEGER NOT NULL,PRIMARY KEY(email,audit_id))").run();
  // Hard-coded initial administrator, cannot be downgraded by API.
  if(email===INITIAL_ADMIN_EMAIL)return "admin";
  const row=await env.DB.prepare("SELECT rolle FROM aw_benutzer WHERE email=? AND aktiv=1").bind(email).first();
- if(!row)return null;const custom=await env.DB.prepare("SELECT rolle FROM aw_rollen WHERE email=?").bind(email).first();return custom?.rolle||"auditor";
+ if(!row)return null;const custom=await env.DB.prepare("SELECT rolle FROM aw_rollen_zuordnung_neu WHERE email=?").bind(email).first();if(custom)return custom.rolle;const legacy=await env.DB.prepare("SELECT rolle FROM aw_rollen WHERE email=?").bind(email).first();return legacy?.rolle||"auditor";
 }
 async function canClient(db,email,clientId){return !!await db.prepare("SELECT 1 FROM aw_benutzer_kunden WHERE email=? AND kunden_id=?").bind(email,Number(clientId)).first()}
 async function canAudit(db,email,auditId){return !!await db.prepare("SELECT 1 FROM aw_benutzer_audits WHERE email=? AND audit_id=?").bind(email,Number(auditId)).first()}
@@ -40,11 +41,11 @@ async function api(req,env,url,ctx){
  if(/^\/api\/roles\/r_[a-f0-9]{16}$/.test(p)&&req.method==="PUT"){if(role!=="admin")return json({error:"Nur Administrator"},403);const d=await parse(req),name=clean(d?.name,80).trim();if(name.length<2)return json({error:"Rollenname fehlt"},400);await env.DB.prepare("UPDATE aw_rollen_definitionen SET bezeichnung=?,kann_bearbeiten=?,kann_planen=? WHERE id=?").bind(name,d.edit?1:0,d.plan?1:0,p.split("/")[3]).run();return json({saved:true})}
  if(p==="/api/users"){
    if(role!=="admin")return json({error:"Nur Administrator"},403);
-   if(req.method==="GET"){return json((await env.DB.prepare("SELECT b.email,COALESCE(r.rolle,b.rolle) rolle,b.aktiv FROM aw_benutzer b LEFT JOIN aw_rollen r ON r.email=b.email ORDER BY b.email").all()).results)}
+   if(req.method==="GET"){return json((await env.DB.prepare("SELECT b.email,COALESCE(n.rolle,r.rolle,b.rolle) rolle,b.aktiv FROM aw_benutzer b LEFT JOIN aw_rollen r ON r.email=b.email LEFT JOIN aw_rollen_zuordnung_neu n ON n.email=b.email ORDER BY b.email").all()).results)}
    if(req.method==="POST"){const d=await parse(req),target=String(d?.email||"").trim().toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)||target===INITIAL_ADMIN_EMAIL||!(["admin","auditor","leser"].includes(d?.role)||await env.DB.prepare("SELECT 1 FROM aw_rollen_definitionen WHERE id=?").bind(String(d?.role||"")).first()))return json({error:"Ungültiger Benutzer"},400);
-     await env.DB.prepare("INSERT INTO aw_benutzer(email,rolle,aktiv) VALUES(?,'auditor',1) ON CONFLICT(email) DO UPDATE SET aktiv=1").bind(target).run();await env.DB.prepare("INSERT INTO aw_rollen(email,rolle) VALUES(?,?) ON CONFLICT(email) DO UPDATE SET rolle=excluded.rolle").bind(target,d.role).run();return json({saved:true})}
+     await env.DB.prepare("INSERT INTO aw_benutzer(email,rolle,aktiv) VALUES(?,'auditor',1) ON CONFLICT(email) DO UPDATE SET aktiv=1").bind(target).run();await env.DB.prepare("INSERT INTO aw_rollen_zuordnung_neu(email,rolle) VALUES(?,?) ON CONFLICT(email) DO UPDATE SET rolle=excluded.rolle").bind(target,d.role).run();return json({saved:true})}
  }
- if(p==="/api/users/role"&&req.method==="PUT"){if(role!=="admin")return json({error:"Nur Administrator"},403);const d=await parse(req),target=String(d?.email||"").trim().toLowerCase();if(target===INITIAL_ADMIN_EMAIL||!["admin","auditor","leser"].includes(d?.role))return json({error:"Ungültige Rolle"},400);const found=await env.DB.prepare("SELECT 1 FROM aw_benutzer WHERE email=?").bind(target).first();if(!found)return json({error:"Benutzer nicht gefunden"},404);await env.DB.prepare("INSERT INTO aw_rollen(email,rolle) VALUES(?,?) ON CONFLICT(email) DO UPDATE SET rolle=excluded.rolle").bind(target,d.role).run();return json({saved:true})}
+ if(p==="/api/users/role"&&req.method==="PUT"){if(role!=="admin")return json({error:"Nur Administrator"},403);const d=await parse(req),target=String(d?.email||"").trim().toLowerCase();if(target===INITIAL_ADMIN_EMAIL||!["admin","auditor","leser"].includes(d?.role))return json({error:"Ungültige Rolle"},400);const found=await env.DB.prepare("SELECT 1 FROM aw_benutzer WHERE email=?").bind(target).first();if(!found)return json({error:"Benutzer nicht gefunden"},404);await env.DB.prepare("INSERT INTO aw_rollen_zuordnung_neu(email,rolle) VALUES(?,?) ON CONFLICT(email) DO UPDATE SET rolle=excluded.rolle").bind(target,d.role).run();return json({saved:true})}
  if(p==="/api/users/assignments"&&req.method==="GET"){if(role!=="admin")return json({error:"Nur Administrator"},403);const c=(await env.DB.prepare("SELECT email,kunden_id id FROM aw_benutzer_kunden").all()).results,a=(await env.DB.prepare("SELECT email,audit_id id FROM aw_benutzer_audits").all()).results;return json({clients:c,audits:a})}
  if(p==="/api/users/assign"){
    if(role!=="admin")return json({error:"Nur Administrator"},403);
