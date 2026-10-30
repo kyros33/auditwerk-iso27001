@@ -1,0 +1,6 @@
+CREATE TABLE IF NOT EXISTS clients (id TEXT PRIMARY KEY,name TEXT NOT NULL,logo_url TEXT DEFAULT '',created_at TEXT DEFAULT (datetime('now')));
+CREATE TABLE IF NOT EXISTS audits (id TEXT PRIMARY KEY,client_id TEXT NOT NULL REFERENCES clients(id),title TEXT NOT NULL,year INTEGER NOT NULL,mode TEXT NOT NULL,auditor TEXT DEFAULT '',audit_date TEXT DEFAULT '',created_at TEXT DEFAULT (datetime('now')));
+CREATE TABLE IF NOT EXISTS questions (id TEXT PRIMARY KEY,category TEXT,title TEXT NOT NULL,reference TEXT,measure TEXT,question_full TEXT,question_maintenance TEXT,evidence_examples TEXT,year_2025 INTEGER DEFAULT 0,year_2026 INTEGER DEFAULT 0,year_2027 INTEGER DEFAULT 0,year_2028 INTEGER DEFAULT 0,templates TEXT DEFAULT '{}',sort_index INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS answers (audit_id TEXT NOT NULL REFERENCES audits(id),question_id TEXT NOT NULL REFERENCES questions(id),status TEXT DEFAULT '',document TEXT DEFAULT '',evidence TEXT DEFAULT '',notes TEXT DEFAULT '',finding TEXT DEFAULT '',template_index INTEGER DEFAULT 0,in_scope INTEGER DEFAULT 1,updated_at TEXT DEFAULT (datetime('now')),PRIMARY KEY(audit_id,question_id));
+CREATE INDEX IF NOT EXISTS idx_audits_client ON audits(client_id);
+CREATE INDEX IF NOT EXISTS idx_questions_sort ON questions(sort_index);
