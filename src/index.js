@@ -70,4 +70,5 @@ $('add-client').onclick=async()=>{try{await call('/api/clients','POST',{name:$('
 $('add-audit').onclick=async()=>{try{await call('/api/audits','POST',{client_id:$('client-select').value,title:$('audit-title').value,year:Number($('audit-year').value),mode:$('audit-mode').value,auditor:$('auditor').value,audit_date:$('audit-date').value});await init()}catch(e){notice(e.message,true)}};
 $('catalog-file').onchange=async e=>{try{const parsed=JSON.parse(await e.target.files[0].text());const result=await call('/api/import','POST',parsed);$('import-result').textContent=result.imported+' Prüfpunkte importiert';await init()}catch(err){$('import-result').textContent=err.message}};
 init();
-</script></body></html>
+</script></body></html>`;
+export default { async fetch(req, env) { const url = new URL(req.url); if (url.pathname.startsWith('/api/')) return api(req, env, url); if (req.method !== 'GET') return new Response('Method not allowed', {status:405}); return new Response(page, {headers: {'content-type':'text/html; charset=utf-8','x-content-type-options':'nosniff','content-security-policy':"frame-ancestors 'none'"}}); } };
